@@ -1,4 +1,4 @@
-name: Build M-AI Miku APK
+.github/workflows/build-apk.ymlname: Build M-AI Miku APK
 
 # ملف واحد يحتوي كل كود ميكو. يحتاج فقط وجود ملف ZIP الأصلي في المستودع (لأخذ صورة miku.png منه).
 on:
