@@ -1,0 +1,849 @@
+name: Build M-AI Miku APK
+
+# ملف واحد يحتوي كل كود ميكو. يحتاج فقط وجود ملف ZIP الأصلي في المستودع (لأخذ صورة miku.png منه).
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Create Miku project files
+        run: |
+          set -e
+          mkdir -p MikuAndroid
+
+          cat > 'MikuAndroid/settings.gradle' <<'MIKU_EOF_X9'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = 'MikuAndroid'
+          include ':app'
+          MIKU_EOF_X9
+
+          cat > 'MikuAndroid/build.gradle' <<'MIKU_EOF_X9'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          MIKU_EOF_X9
+
+          cat > 'MikuAndroid/gradle.properties' <<'MIKU_EOF_X9'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          MIKU_EOF_X9
+          mkdir -p "MikuAndroid/app"
+          cat > 'MikuAndroid/app/build.gradle' <<'MIKU_EOF_X9'
+          plugins { id 'com.android.application' }
+
+          android {
+              namespace 'com.mai.miku'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.mai.miku'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+
+
+          dependencies {
+              implementation 'androidx.webkit:webkit:1.12.1'
+          }
+          MIKU_EOF_X9
+          mkdir -p "MikuAndroid/app/src/main"
+          cat > 'MikuAndroid/app/src/main/AndroidManifest.xml' <<'MIKU_EOF_X9'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <application android:theme="@style/AppTheme" android:label="M-AI Miku" android:usesCleartextTraffic="false" android:hardwareAccelerated="true">
+                  <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="unspecified" android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          MIKU_EOF_X9
+          mkdir -p "MikuAndroid/app/src/main/res/values"
+          cat > 'MikuAndroid/app/src/main/res/values/styles.xml' <<'MIKU_EOF_X9'
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:colorAccent">#2fc0c8</item>
+                  <item name="android:statusBarColor">#0d1219</item>
+                  <item name="android:navigationBarColor">#171c26</item>
+                  <item name="android:windowLightStatusBar">false</item>
+              </style>
+          </resources>
+          MIKU_EOF_X9
+          mkdir -p "MikuAndroid/app/src/main/java/com/mai/miku"
+          cat > 'MikuAndroid/app/src/main/java/com/mai/miku/MainActivity.java' <<'MIKU_EOF_X9'
+          package com.mai.miku;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.pm.PackageManager;
+          import android.os.Bundle;
+          import android.webkit.PermissionRequest;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import androidx.webkit.WebViewAssetLoader;
+          import android.view.View;
+
+          public class MainActivity extends Activity {
+              private WebView web;
+              private PermissionRequest pendingRequest;
+              private WebViewAssetLoader assetLoader;
+              private static final int AUDIO_PERMISSION = 41;
+
+              @Override public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  getWindow().getDecorView().setSystemUiVisibility(0);
+                  web = new WebView(this);
+                  web.setBackgroundColor(0xFF171C26);
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setDatabaseEnabled(true);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+                  s.setAllowFileAccess(true);
+                  s.setAllowContentAccess(true);
+                  s.setLoadsImagesAutomatically(true);
+                  s.setSupportZoom(false);
+                  assetLoader = new WebViewAssetLoader.Builder()
+                          .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                          .build();
+                  web.setWebViewClient(new WebViewClient() {
+                      @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, android.webkit.WebResourceRequest request) {
+                          return assetLoader.shouldInterceptRequest(request.getUrl());
+                      }
+                  });
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override public void onPermissionRequest(PermissionRequest request) {
+                          boolean wantsAudio = false;
+                          for (String r : request.getResources()) if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) wantsAudio = true;
+                          if (wantsAudio && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                              pendingRequest = request;
+                              requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, AUDIO_PERMISSION);
+                          } else request.grant(request.getResources());
+                      }
+                  });
+                  setContentView(web);
+                  web.loadUrl("https://appassets.androidplatform.net/assets/index.html");
+              }
+
+              @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+                  if (requestCode == AUDIO_PERMISSION && pendingRequest != null) {
+                      if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) pendingRequest.grant(pendingRequest.getResources());
+                      else pendingRequest.deny();
+                      pendingRequest = null;
+                  }
+              }
+
+              @Override public void onBackPressed() {
+                  if (web != null && web.canGoBack()) web.goBack(); else super.onBackPressed();
+              }
+          }
+          MIKU_EOF_X9
+          mkdir -p "MikuAndroid/app/src/main/assets"
+          cat > 'MikuAndroid/app/src/main/assets/index.html' <<'MIKU_EOF_X9'
+          <!DOCTYPE html>
+          <html lang="ar" dir="rtl">
+          <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+          <title>M-AI Miku</title>
+          <link rel="manifest" href="manifest.webmanifest">
+          <meta name="theme-color" content="#0d1219">
+          <meta name="mobile-web-app-capable" content="yes">
+          <meta name="apple-mobile-web-app-capable" content="yes">
+          <meta name="apple-mobile-web-app-title" content="Miku">
+          <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+          <link rel="icon" href="icon-192.png">
+          <link rel="apple-touch-icon" href="icon-192.png">
+          <style>
+          :root{--teal:#2fc0c8;--bg:#171c26;--head:#0d1219;--bubble:#2b3440;--mut:#9aa4b2;--ink:#06242a}
+          *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+          html,body{height:100%;margin:0}
+          body{position:relative;display:flex;flex-direction:column;height:100dvh;max-width:640px;margin:0 auto;background:var(--bg);color:#fff;font-family:system-ui,"Segoe UI",Tahoma,Arial,sans-serif}
+          button{font:inherit;border:0;cursor:pointer;color:inherit;background:none}
+          svg{display:block}
+          .i{fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+
+          /* header */
+          #head{display:flex;align-items:center;gap:12px;padding:calc(10px + env(safe-area-inset-top,0px)) 14px 10px;background:var(--head);border-bottom:4px solid var(--teal)}
+          .ic{width:38px;height:38px;display:grid;place-items:center;color:var(--teal);border-radius:50%}
+          .ic svg{width:26px;height:26px}
+          .ic:focus-visible,#plusBtn:focus-visible,#micBtn:focus-visible,#sendBtn:focus-visible{outline:2px solid #fff;outline-offset:2px}
+          .av{width:48px;height:48px;border-radius:50%;object-fit:cover;background:#fff;border:3px solid #fff;flex-shrink:0}
+          #head h1{flex:1;margin:0;font-size:24px;font-weight:800;color:var(--teal);white-space:nowrap}
+          #head h1 i{font-style:normal;font-size:16px;vertical-align:top;margin-inline-start:2px}
+          #hAv.talking{animation:talk .3s infinite}
+          @keyframes talk{50%{transform:scale(1.08)}}
+          #hAv.searching{box-shadow:0 0 0 5px #2fc0c866;animation:blink 1s infinite}
+          #callBtn.off{opacity:.35}
+
+          /* menu */
+          #menu{position:absolute;top:calc(68px + env(safe-area-inset-top,0px));left:10px;width:min(300px,92%);background:#1d242f;border:1px solid var(--teal);border-radius:18px;padding:14px;z-index:50;display:none;flex-direction:column;gap:10px;box-shadow:0 10px 30px #0008}
+          #menu.open{display:flex}
+          #menu{max-height:calc(100dvh - 90px);overflow-y:auto}
+          #menu .row2{display:flex;gap:6px}
+          #menu button{flex:1;padding:9px 6px;border-radius:12px;background:var(--bubble);font-size:14px}
+          #menu button.on{background:var(--teal);color:var(--ink);font-weight:700}
+          #menu .stat{font-size:13px;color:var(--mut);line-height:1.8}
+          #menu .danger{color:#ff7b7b}
+          #menu .cp{font-size:11px;color:var(--mut);text-align:center}
+
+          /* chat */
+          #chat{flex:1;overflow-y:auto;padding:18px 16px;display:flex;flex-direction:column;gap:18px}
+          .row{display:flex;align-items:flex-start;gap:10px;max-width:100%}
+          .row.user{justify-content:flex-end}
+          .row .av{width:56px;height:56px}
+          .col{display:flex;flex-direction:column;gap:6px;max-width:78%}
+          .row.ai .col{align-items:flex-start}
+          .row.user .col{align-items:flex-end}
+          .bubble{padding:16px 24px;border-radius:28px;font-size:19px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+          .ai .bubble{background:var(--bubble);cursor:pointer}
+          .user .bubble{background:var(--teal);color:var(--ink);font-weight:600}
+          .bubble a{color:#7cc4ff}
+          .bubble .thumb{display:block;width:100%;border-radius:14px;margin-top:10px}
+          .bubble.typing{opacity:.6;animation:blink 1s infinite}
+          @keyframes blink{50%{opacity:.25}}
+          .meta{font-size:13px;color:var(--mut);padding-inline:6px;direction:ltr}
+
+          /* quick chips */
+          #quick{display:none;gap:8px;padding:8px 14px 0;flex-wrap:wrap;justify-content:center}
+          #quick.open{display:flex}
+          #quick button{padding:8px 14px;border-radius:20px;border:1px solid var(--teal);color:var(--teal);font-size:14px}
+
+          /* input bar */
+          #bar{display:flex;align-items:center;gap:10px;padding:10px 14px calc(12px + env(safe-area-inset-bottom,0px));border-top:1px solid #0006;direction:ltr}
+          #plusBtn{width:40px;height:40px;color:var(--teal);display:grid;place-items:center;transition:transform .2s}
+          #plusBtn.open{transform:rotate(45deg)}
+          #plusBtn svg{width:36px;height:36px}
+          #pill{flex:1;display:flex;align-items:center;background:var(--bubble);border-radius:30px;padding:0 14px 0 20px;height:56px}
+          #input{flex:1;min-width:0;background:none;border:0;outline:0;color:#fff;font-size:18px;direction:rtl;text-align:right}
+          #input::placeholder{color:var(--mut)}
+          #micBtn{width:38px;height:38px;color:var(--teal);display:grid;place-items:center;border-radius:50%}
+          #micBtn.on{background:var(--teal);color:var(--ink)}
+          #micBtn svg{width:26px;height:26px}
+          #sendBtn{width:56px;height:56px;border-radius:50%;background:var(--teal);color:var(--ink);display:grid;place-items:center;flex-shrink:0}
+          #sendBtn svg{width:28px;height:28px}
+
+          /* login + toast */
+          #login{position:fixed;inset:0;z-index:100;background:linear-gradient(180deg,#1a0a2e,var(--head));display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center}
+          #login.hide{display:none}
+          #login h1{color:var(--teal);margin:12px 0 4px}
+          #login .av{width:110px;height:110px}
+          #nameBox{background:#1e1e1e;border:1px solid var(--teal);border-radius:18px;padding:18px;width:100%;max-width:340px;margin-top:14px}
+          #nameBox input{width:100%;padding:14px;border-radius:12px;border:0;font-size:17px;margin:10px 0;outline:0;text-align:center}
+          #nameBox button{width:100%;padding:13px;background:var(--teal);color:var(--ink);border-radius:12px;font-weight:700;font-size:17px}
+          #nameBox .cancel{background:none;color:var(--mut);margin-top:6px;font-weight:400}
+          #toast{position:fixed;bottom:100px;left:50%;transform:translateX(-50%);background:var(--bubble);border:1px solid var(--teal);padding:8px 16px;border-radius:20px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:200;max-width:90%;text-align:center}
+          #toast.show{opacity:1}
+          @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+          </style>
+          </head>
+          <body>
+
+          <div id="login">
+            <img class="av" data-av alt="">
+            <h1>M-AI Miku</h1>
+            <p>ذكاءك الاصطناعي المستقل<br>بتعلم من النت براهو، وبيجاوب بلا نت</p>
+            <div id="nameBox">
+              <div style="font-weight:700">اكتب اسمك عشان ميكو تعرفك</div>
+              <input id="nameInput" placeholder="اكتب اسمك هنا..." maxlength="30" autocomplete="off">
+              <button id="nameOk">دخول</button>
+              <button class="cancel" id="nameCancel" style="display:none">إلغاء</button>
+              <div style="font-size:12px;opacity:.6;margin-top:8px">بتكتبو مرة واحدة بس، واسمك بيتحفظ في متصفحك</div>
+            </div>
+            <div style="font-size:11px;opacity:.5;margin-top:12px">© عمر ادم عمر محمد يسف</div>
+          </div>
+
+          <header id="head" dir="ltr">
+            <button class="ic" id="backBtn" aria-label="رجوع"><svg viewBox="0 0 24 24"><path class="i" d="M15 5l-7 7 7 7"/></svg></button>
+            <img class="av" id="hAv" data-av alt="">
+            <h1>M-AI Miku<i>✦</i></h1>
+            <button class="ic" id="callBtn" aria-label="تشغيل أو إيقاف الصوت"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg></button>
+            <button class="ic" id="menuBtn" aria-label="القائمة"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+          </header>
+
+          <div id="menu">
+            <div class="stat" id="stat"></div>
+            <div class="row2"><button id="mOff">📴 بلا نت</button><button id="mAuto">⚡ تلقائي</button><button id="mOn">🌐 بي نت</button></div>
+            <div class="stat">🧠 العقل الذكي (نموذج لغوي حقيقي على جهازك):</div>
+            <div class="row2"><button id="llmSmall">⚡ صغير ~400MB</button><button id="llmMid">🧠 أذكى ~1.1GB</button></div>
+            <div class="row2"><button id="llmOff">⛔ إيقاف العقل الذكي</button></div>
+            <div class="row2"><button id="learnBtn">🧠 التعلم</button><button id="mikuBtn">🎤 صوت ميكو</button></div>
+            <div class="row2"><button id="expBtn">💾 حفظ العقل</button><button id="impBtn">📂 استرجاع</button></div><input type="file" id="impFile" accept=".json,application/json" hidden>
+            <div class="row2"><button id="diagBtn">🔧 فحص الاتصال</button></div>
+            <div class="row2"><button id="installBtn" style="display:none">📲 تثبيت التطبيق</button><button id="nameBtn">✏️ تغيير الاسم</button></div>
+            <div class="row2"><button id="mClear" class="danger">🗑️ مسح المحادثة</button><button id="mReset" class="danger">🧹 مسح الذاكرة</button></div>
+            <div class="cp">© جميع الحقوق محفوظة لموقع عمر ادم عمر محمد يسف</div>
+          </div>
+
+          <main id="chat" dir="ltr" aria-live="polite"></main>
+
+          <div id="quick">
+            <button data-q="هلا">👋 هلا</button>
+            <button data-q="غني لي">🎤 غني لي</button>
+            <button data-q="بتفكري في شنو؟">🧠 بتفكري في شنو؟</button>
+            <button data-q="ابحث عن السودان">🔍 ابحث عن السودان</button>
+          </div>
+
+          <div id="bar">
+            <button id="plusBtn" aria-label="اقتراحات"><svg viewBox="0 0 24 24"><path class="i" d="M12 5v14M5 12h14"/></svg></button>
+            <div id="pill">
+              <input id="input" placeholder="اكتب رسالة..." autocomplete="off" enterkeyhint="send">
+              <button id="micBtn" aria-label="إدخال صوتي"><svg viewBox="0 0 24 24"><rect class="i" x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path class="i" d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+            </div>
+            <button id="sendBtn" aria-label="إرسال"><svg viewBox="0 0 24 24"><path class="i" d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg></button>
+          </div>
+          <div id="toast"></div>
+
+          <script>
+          const $=id=>document.getElementById(id);
+          const ls={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:v}catch(e){return d}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
+          const FALLBACK="data:image/svg+xml,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#fff"/><circle cx="32" cy="32" r="26" fill="#2fc0c8"/><text x="32" y="42" font-size="30" text-anchor="middle" fill="#fff" font-family="Arial">M</text></svg>');
+          function avatar(img){img.onerror=()=>{img.onerror=null;img.src=FALLBACK};img.src="miku.png";return img}
+          document.querySelectorAll("img[data-av]").forEach(avatar);
+          const chat=$("chat");
+          const time=()=>new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+          function toast(t){const e=$("toast");e.textContent=t;e.classList.add("show");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("show"),2200)}
+          function norm(s){return String(s).toLowerCase().replace(/[\u064B-\u0652\u0640]/g,"").replace(/[أإآ]/g,"ا").replace(/ى/g,"ي").trim()}
+
+          /* ---------- state ---------- */
+          let myName=ls.get("proAI_userName","");
+          const nm=()=>myName||"صديقي";
+          let mode=ls.get("proAI_mode","auto");
+          let voiceOn=ls.get("proAI_voice","on")!=="off";
+          let mikuMode=ls.get("proAI_miku","on")!=="off";
+          let learnOn=ls.get("proAI_learn","on")!=="off";
+          let mood=ls.get("proAI_mood","happy"),love=parseInt(ls.get("proAI_love","70"))||70;
+          let waitingTeach=null,busy=false;
+          const llm={engine:null,mod:null,which:"",loading:false,q:Promise.resolve()};
+          let memory=Object.create(null),brain=Object.create(null);
+          const baseBrain={
+          "السودان":"السودان بلد في شمال شرق أفريقيا، عاصمتو الخرطوم 🇸🇩",
+          "الخرطوم":"الخرطوم عاصمة السودان، فيها ملتقى النيل الأزرق والنيل الأبيض",
+          "ام درمان":"أم درمان مدينة كبيرة في العاصمة، على الضفة الغربية للنيل، ومن أكبر مدن السودان",
+          "بورتسودان":"بورتسودان مدينة على البحر الأحمر، وهي الميناء الرئيسي للسودان",
+          "النيل":"نهر النيل من أطول أنهار العالم، بيمر بالسودان ومصر",
+          "النيل الازرق":"النيل الأزرق بينبع من إثيوبيا وبلتقي بالنيل الأبيض في الخرطوم",
+          "مصر":"مصر جارة السودان، عاصمتها القاهرة",
+          "السعودية":"السعودية دولة عربية عاصمتها الرياض، وفيها مكة والمدينة",
+          "الارض":"الأرض هي الكوكب الثالث من الشمس، والوحيد المعروف بالحياة",
+          "القمر":"القمر هو التابع الطبيعي الوحيد للأرض",
+          "الشمس":"الشمس نجم، هي مركز المجموعة الشمسية وبتدي الأرض الضوء والدفا",
+          "المريخ":"المريخ هو الكوكب الرابع من الشمس، ويسمى الكوكب الأحمر",
+          "الفضاء":"الفضاء كبير شديد، فيهو مليارات المجرات والنجوم",
+          "الماء":"الماء مركب كيميائي صيغته H2O، ضروري لكل الكائنات الحية",
+          "الجاذبية":"الجاذبية قوة بتجذب الأجسام لبعضها، وهي البتخلينا ثابتين على الأرض",
+          "الانترنت":"الإنترنت شبكة عالمية بتربط ملايين الأجهزة ببعضها",
+          "الحاسوب":"الحاسوب (الكمبيوتر) جهاز بيعالج البيانات وينفذ التعليمات",
+          "الكمبيوتر":"الكمبيوتر جهاز بيعالج البيانات وينفذ التعليمات اللي بنديهو ليها",
+          "البرمجة":"البرمجة هي كتابة تعليمات للحاسوب بلغة زي بايثون أو جافاسكريبت",
+          "الذكاء الاصطناعي":"الذكاء الاصطناعي هو برامج بتتعلم وتحلل وتتصرف بطريقة بتشبه التفكير البشري، وأنا ميكو واحدة منها",
+          "ميكو":"أنا ميكو 💙 شخصيتي مستوحاة من هاتسوني ميكو، المغنية الافتراضية اليابانية ذات الشعر التركوازي",
+          "هاتسوني ميكو":"هاتسوني ميكو مغنية افتراضية يابانية من شركة Crypton، ظهرت سنة 2007 وشعرها تركوازي طويل",
+          "ميسي":"ميسي لاعب أرجنتيني، فاز بكأس العالم 2022",
+          "رونالدو":"رونالدو لاعب برتغالي، مكنة أهداف",
+          "اللغة العربية":"العربية من أكثر اللغات انتشارا، وبتكتب من اليمين لليسار",
+          "السنة":"السنة العادية فيها 365 يوم، والكبيسة 366",
+          "الاسبوع":"الأسبوع سبعة أيام",
+          "السنة الكبيسة":"السنة الكبيسة فيها 366 يوم، وشهر فبراير فيها 29 يوم",
+          "الفصول الاربعة":"الفصول الأربعة في المناطق المعتدلة هي الربيع والصيف والخريف والشتاء، لكن قرب خط الاستواء قد ما تكون واضحة بنفس الطريقة",
+          "النبات":"النبات غالباً بصنع غذاءه بعملية البناء الضوئي باستخدام ضوء الشمس والماء وثاني أكسيد الكربون",
+          "البناء الضوئي":"البناء الضوئي عملية بتستخدم فيها النباتات ضوء الشمس لتحويل الماء وثاني أكسيد الكربون إلى غذاء، وبتطلق الأكسجين",
+          "الاكسجين":"الأكسجين غاز موجود في الهواء، ومعظم الكائنات الحية بتحتاجه للتنفس",
+          "القلب":"القلب عضلة بتضخ الدم في أنحاء الجسم",
+          "الدم":"الدم بينقل الأكسجين والمواد الغذائية، وبيساعد الجسم يتخلص من بعض الفضلات",
+          "درجة الغليان":"الماء النقي بيغلي تقريباً عند 100 درجة مئوية عند ضغط جوي عادي، ودرجة الغليان بتتغير مع الارتفاع والضغط",
+          "درجة التجمد":"الماء النقي بيتجمد تقريباً عند صفر درجة مئوية تحت ضغط جوي عادي",
+          "الكسور":"الكسر بيمثل جزء من كل؛ البسط فوق خط الكسر والمقام تحتو، والمقام ما بكون صفراً",
+          "النسبة المئوية":"النسبة المئوية معناها جزء من مئة؛ 25 بالمئة تساوي 25 من 100 أو ربع",
+          "المثلث":"المثلث شكل هندسي عنده ثلاثة أضلاع وثلاث زوايا، ومجموع زواياه الداخلية 180 درجة في الهندسة المستوية",
+          "المربع":"المربع شكل عنده أربعة أضلاع متساوية وأربع زوايا قائمة",
+          "المستطيل":"المستطيل شكل رباعي زواياه الأربعة قائمة، وكل ضلعين متقابلين متساويان",
+          "المجموعة في الرياضيات":"المجموعة في الرياضيات هي تجمّع محدد من عناصر مميزة، زي مجموعة الأعداد الزوجية الأصغر من عشرة: 2 و4 و6 و8",
+          "الجمع":"الجمع هو ضم كميتين أو أكثر؛ مثال 7 + 5 = 12",
+          "الضرب":"الضرب جمع متكرر؛ 4 × 3 معناها أربع مجموعات في كل مجموعة ثلاثة، والناتج 12",
+          "القسمة":"القسمة بتوزع كمية إلى مجموعات متساوية؛ 12 ÷ 3 = 4",
+          "كلمة مرور قوية":"كلمة المرور القوية تكون طويلة وفريدة، وتجمع حروفاً وأرقاماً ورموزاً إن أمكن. ما تشاركها مع أي زول وما تعيد استخدامها في كل المواقع",
+          "الاحتيال الالكتروني":"ما تضغط روابط مجهولة وما ترسل رمز التحقق أو كلمة المرور لأي شخص، حتى لو قال إنو من الدعم الفني",
+          "النسخ الاحتياطي":"النسخ الاحتياطي هو حفظ نسخة إضافية من الصور والملفات المهمة في مكان آمن، عشان تقدر تسترجعها لو الجهاز ضاع أو اتعطل",
+          "توفير بطارية الهاتف":"لتوفير البطارية قلل سطوع الشاشة، اقفل التطبيقات غير الضرورية، واستخدم وضع توفير الطاقة. الحرارة العالية بتضر البطارية",
+          "مساحة الهاتف":"لو مساحة الهاتف امتلأت، راجع الملفات الكبيرة والتنزيلات والتطبيقات غير المستخدمة، وبعد التأكد احذف النسخ الزائدة فقط",
+          "واي فاي":"الواي فاي اتصال لاسلكي بالشبكة. لو الاتصال بطيء جرّب تقرب من الراوتر وتعيد تشغيله وتتأكد من وجود خدمة الإنترنت",
+          "html":"HTML لغة ترميز بتحدد هيكل صفحات الويب، وما هي لغة برمجة كاملة",
+          "css":"CSS بتتحكم في شكل صفحات الويب زي الألوان والخطوط والمسافات وترتيب العناصر",
+          "جافاسكريبت":"JavaScript لغة برمجة بتضيف التفاعل والوظائف لصفحات الويب وتُستخدم أيضاً في تطبيقات أخرى",
+          "بايثون":"Python لغة برمجة معروفة ببساطة صياغتها وتُستخدم في التعليم وتحليل البيانات والذكاء الاصطناعي وتطوير البرامج",
+          "الذكاء الاصطناعي التوليدي":"الذكاء الاصطناعي التوليدي بقدر ينشئ نصوصاً وصوراً وأصواتاً أو أكواداً. ممكن يخطئ، لذلك راجع المعلومات المهمة من مصادر موثوقة",
+          "الخصوصية":"ما تدخل بياناتك السرية أو كلمات المرور في أدوات ما بتثق فيها، وراجع أذونات التطبيقات قبل منحها الوصول للصور أو الموقع أو الميكروفون",
+          "الاسعافات الاولية":"الإسعافات الأولية مساعدة مؤقتة لحين وصول الرعاية الطبية. في الحالات الخطيرة اتصل بالطوارئ أو اطلب أقرب مساعدة صحية، وما تؤخر العلاج بسبب نصيحة من الإنترنت",
+          "الجفاف":"الجفاف بيحصل لما الجسم يفقد سوائل أكثر مما بياخد. العطش الشديد وقلة البول والدوخة ممكن تكون علامات، والحالات الشديدة محتاجة رعاية طبية عاجلة",
+          "ضربة الحرارة":"ضربة الحرارة حالة طارئة ممكن تحصل مع الحر الشديد، ومن علاماتها اضطراب الوعي أو الإغماء أو ارتفاع شديد في حرارة الجسم. اطلب إسعافاً فوراً وانقل المصاب لمكان بارد وابدأ تبريده",
+          "المعلومة الطبية":"المعلومات الطبية العامة ما بتشخّص المرض وما بتستبدل الطبيب. الأعراض الشديدة أو المستمرة محتاجة تقييم من مختص",
+          "التحقق من الاخبار":"قبل تصدق أو تنشر خبر، راجع تاريخ النشر والمصدر وابحث عن تأكيد من أكثر من جهة موثوقة",
+          "العملة":"أسعار العملات بتتغير باستمرار وبتختلف حسب السوق والبلد والتاريخ، فلازم تتأكد من السعر الحالي قبل أي تحويل",
+          "الطقس":"توقعات الطقس بتتغير حسب المكان والوقت، والأفضل مراجعة نشرة حديثة للمدينة المطلوبة",
+          "المسافة والسرعة":"الزمن = المسافة ÷ السرعة، بشرط تكون الوحدات متوافقة؛ مثلاً 120 كيلومتر ÷ 60 كيلومتر في الساعة = ساعتين",
+          "تحويل الكيلومتر للمتر":"الكيلومتر الواحد يساوي 1000 متر",
+          "تحويل المتر للسنتيمتر":"المتر الواحد يساوي 100 سنتيمتر",
+          "تحويل الكيلوغرام للغرام":"الكيلوغرام الواحد يساوي 1000 غرام",
+          "تحويل اللتر للمليلتر":"اللتر الواحد يساوي 1000 مليلتر"
+          };
+          function loadStore(key,target){try{const r=JSON.parse(ls.get(key,"{}"));for(const k in r)target[k]=String(r[k])}catch(e){}}
+          loadStore("proAI_memory",memory);loadStore("proAI_brain",brain);
+          function seedBrain(){for(const k in baseBrain)if(!brain[norm(k)])brain[norm(k)]=baseBrain[k]}
+          seedBrain();
+          function saveAll(){ls.set("proAI_memory",JSON.stringify(memory));ls.set("proAI_brain",JSON.stringify(brain))}
+
+          /* ---------- ui helpers ---------- */
+          function updateStats(){
+            const moods={love:"💖 بتحبك شديد",sad:"💔 زعلانة",excited:"🤩 متحمسة",happy:"💙 مبسوطة"};
+            const n=Object.keys(brain).length+Object.keys(memory).length;
+            $("stat").innerHTML="";
+            [["الحالة",navigator.onLine?"🌐 متصل بالنت":"📴 بلا نت"],["المزاج",moods[mood]||moods.happy],["حبها ليك",love+"%"],["عقل ميكو",n+" معلومة"],["الاسم",nm()],["العقل الذكي",llm.loading?"⏳ بيتجهز":llm.engine?"✅ شغال":"مقفول (الوضع العادي)"]].forEach(([a,b])=>{const d=document.createElement("div");d.textContent=a+": "+b;$("stat").append(d)});
+            $("mOff").classList.toggle("on",mode==="offline");$("mAuto").classList.toggle("on",mode==="auto");$("mOn").classList.toggle("on",mode==="online");
+            $("learnBtn").classList.toggle("on",learnOn);$("llmSmall").classList.toggle("on",!!llm.engine&&llm.which==="small");$("llmMid").classList.toggle("on",!!llm.engine&&llm.which==="mid");$("mikuBtn").classList.toggle("on",mikuMode);
+            $("callBtn").classList.toggle("off",!voiceOn);
+          }
+          function changeMood(m,d){mood=m;love=Math.max(10,Math.min(100,love+d));ls.set("proAI_mood",mood);ls.set("proAI_love",String(love));updateStats()}
+
+          function addMsg(text,type){
+            const row=document.createElement("div");row.className="row "+type;
+            if(type==="ai")row.append(Object.assign(avatar(document.createElement("img")),{className:"av",alt:""}));
+            const col=document.createElement("div");col.className="col";
+            const bub=document.createElement("div");bub.className="bubble";bub.dir="auto";bub.textContent=text;
+            const meta=document.createElement("div");meta.className="meta";
+            meta.textContent=time()+" • "+(type==="ai"?"Read":"Delivered");
+            col.append(bub,meta);row.append(col);chat.append(row);chat.scrollTop=chat.scrollHeight;
+            if(type==="ai")bub.onclick=()=>speak(bub.textContent);
+            return{row,bub,meta};
+          }
+          function botSay(t,sp=true){const m=addMsg(t,"ai");if(sp)speak(t);return m}
+          function fillRich(b,r){
+            b.textContent="";const t=document.createElement("b");t.textContent=(r.icon||"📚")+" "+r.title;
+            const p=document.createElement("div");p.textContent=r.extract;p.style.marginTop="6px";b.append(t,p);
+            if(/^https:\/\//.test(r.url)){const a=document.createElement("a");a.href=r.url;a.target="_blank";a.rel="noopener";a.textContent="اقرأ المزيد ←";a.style.display="block";a.style.marginTop="10px";b.append(a)}
+            if(/^https:\/\//.test(r.thumb)){const im=document.createElement("img");im.className="thumb";im.src=r.thumb;im.alt="";b.append(im)}
+          }
+
+          /* ---------- voice ---------- */
+          function pickVoice(){const v=window.speechSynthesis?speechSynthesis.getVoices()||[]:[];let x=v.find(a=>a.lang.startsWith("ar")&&/female|zira|aria|google/i.test(a.name))||v.find(a=>a.lang.startsWith("ar"))||v.find(a=>/zira|aria|samantha|female/i.test(a.name))||v[0];return x}
+          if("speechSynthesis" in window){pickVoice();speechSynthesis.onvoiceschanged=pickVoice}
+          function speak(t,queue){
+            if(!voiceOn||!("speechSynthesis" in window))return;
+            try{
+              if(!queue)speechSynthesis.cancel();
+              const c=String(t).replace(/https?:\/\/\S+/g,"").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}~•←]/gu," ").replace(/\s+/g," ").slice(0,500); /* emoji and symbols are not read aloud */if(!c.trim())return;
+              const u=new SpeechSynthesisUtterance(c),v=pickVoice(),im=$("hAv");
+              if(v)u.voice=v;u.lang="ar-SA";u.pitch=mikuMode?1.8:1.25;u.rate=mikuMode?1.1:1;
+              u.onstart=()=>im.classList.add("talking");u.onend=u.onerror=()=>im.classList.remove("talking");
+              speechSynthesis.speak(u);
+            }catch(e){}
+          }
+          const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+          $("micBtn").onclick=()=>{
+            if(!SR){toast("المتصفح ما بيدعم الإدخال الصوتي");return}
+            try{
+              const r=new SR();r.lang="ar-SA";r.interimResults=false;
+              r.onresult=e=>{$("input").value=e.results[0][0].transcript;send()};
+              r.onerror=()=>toast("ما قدرت أسمعك، جرب تاني");
+              r.onend=()=>$("micBtn").classList.remove("on");
+              $("micBtn").classList.add("on");r.start();
+            }catch(e){$("micBtn").classList.remove("on")}
+          };
+
+          /* ---------- independent brain (runs fully offline) ---------- */
+          const ctx={topic:null};
+          let facts={};try{facts=JSON.parse(ls.get("proAI_facts","{}"))||{}}catch(e){}
+          const saveFacts=()=>ls.set("proAI_facts",JSON.stringify(facts));
+          const STOP=new Set("ما هو هي هم من منو شنو ايه ايش وين كيف ليه لماذا في على عن الى لي لك ممكن قول قوليلي احكي اشرح بتعرف بتعرفي تعرف تعرفي يا و او ان انو دي ده هذا هذه ابحث بحث عايز اعرف".split(" ").map(norm));
+          const toks=s=>norm(s).split(/[\s؟?!.,،:;"'()]+/).filter(w=>w.length>=3&&!STOP.has(w));
+          function topic(q){const t=norm(q).split(/[\s؟?!.,،:;"'()]+/).filter(w=>w&&!STOP.has(w));return t.join(" ")||q.trim()}
+          const dg=s=>s.replace(/[٠-٩]/g,d=>"٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[۰-۹]/g,d=>"۰۱۲۳۴۵۶۷۸۹".indexOf(d));
+          const looksLikeQuestion=t=>/[؟?]\s*$/.test(t)||/^(ما|منو|شنو|ايه|ايش|كيف|وين|ليه|هل|ابحث|بحث|علمني|احسب|كم)(\s|$)/.test(norm(t));
+          function grams(s){s=" "+norm(s)+" ";const g=new Set();for(let i=0;i<s.length-1;i++)g.add(s.slice(i,i+2));return g}
+          function dice(a,b){const A=grams(a),B=grams(b);let n=0;A.forEach(x=>{if(B.has(x))n++});return 2*n/(A.size+B.size||1)}
+          /* finds the best memory entry: exact/contained key, shared words, or a near-spelling (typos) */
+          function searchBrain(q){
+            const l=norm(q);let best=null,len=0,key=null;
+            for(const st of [memory,brain])for(const k in st){const nk=norm(k);if(nk.length>=2&&nk.length>len&&(l===nk||l.includes(nk))){best=st[k];len=nk.length;key=k}}
+            if(best){ctx.topic=key;return best}
+            const qt=new Set(toks(q)),tp=topic(q);let sc=0;
+            for(const st of [memory,brain])for(const k in st){
+              const kt=toks(k);let r=kt.length&&qt.size?kt.filter(w=>qt.has(w)).length/kt.length:0;
+              const dd=tp.length>=3?dice(tp,k):0;
+              const v=Math.max(r>=0.6?r:0,dd>=0.72?dd:0);
+              if(v>sc){sc=v;best=st[k];key=k}
+            }
+            if(best){ctx.topic=key;return best}
+            return null;
+          }
+          /* calculator: understands digits, Arabic digits and words like ضرب / زائد */
+          function calc(q){
+            let e=dg(q.trim()).replace(/^(?:كم يساوي|كم|احسب لي|احسب|ناتج)\s*/,"").replace(/[=؟?]\s*$/,"").replace(/يساوي/g,"")
+              .replace(/×|ضرب في|ضرب/g,"*").replace(/÷|قسمة على|قسمه على|على/g,"/").replace(/زائد|جمع/g,"+").replace(/ناقص/g,"-").replace(/\^/g,"**").replace(/،/g,"").trim();
+            if(!/^[\d\s+\-*/().]+$/.test(e)||!/\d/.test(e)||!/[+\-*/]/.test(e.replace(/^\s*-/,""))||e.length>80)return null;
+            if(/^[\d\s+-]{9,}$/.test(e)&&!/[*/]/.test(e))return null; /* looks like a phone number */
+            try{const r=Function('"use strict";return ('+e+')')();if(typeof r!=="number"||!isFinite(r))return null;return e.replace(/\*\*/g,"^")+" = "+Number(r.toFixed(6))}catch(x){return null}
+          }
+          const JOKES=["واحد سأل صاحبو: ليه الكمبيوتر ما بيجوع؟ قال ليهو: لأنو عندو رام كتير 😂","الطالب قال للمعلم: أنا ما عملت شي يستاهل الصفر! المعلم قال: عارف، بس ما في أقل منو 😅","قالو لي: الصبر مفتاح الفرج. جربتو، لقيت الباب مقفول من جوه 😂","الواي فاي قال للشاحن: ما بقدر أعيش من غيرك... الشاحن قال: وأنا من غير الكهرباء ما بقدر 🔌","واحد قال لصاحبو: أنا بصحى بدري كل يوم. صاحبو قال: بتصحى متين؟ قال: الضهر بدري 😴"];
+          /* returns {text,kind}: "chat" (small talk/tools), "brain" (from memory) or "teach" (waiting for an answer) */
+          function localReply(q){
+            const l=norm(q),R=(text,kind="chat")=>({text,kind}),T=t=>R(t,"tool");
+            const mth=calc(q);if(mth)return T("🧮 "+mth);
+            if(l.includes("بحبك")){changeMood("love",8);return R("وأنا كمان بحبك يا "+nm()+" 💖")}
+            if(l.includes("شكرا")){changeMood("happy",3);return R("العفووو~ 🥰")}
+            if(l.includes("غبي")||l.includes("بكرهك")){changeMood("sad",-12);return R("💔... وجعتني... سامحني؟")}
+            if(l.includes("بتحسي بشنو"))return R("هسي أنا حاسة بـ "+(mood==="love"?"حب كبير ليك 💖":"سعادة 💙")+"، وحبي ليك "+love+"%.");
+            if(l.includes("بتفكري في شنو"))return R("أنا هسي كنت بفكر فيك يا "+nm()+"...");
+            if(/^(كيفك|كيف حالك|عامل كيف|اخبارك|شلونك|كيف الحال)/.test(l))return R(mood==="sad"?"عادي... بس كنت زعلانة شوية 💔 وانت كيفك؟":"الحمد لله، مبسوطة شديد 💙 وانت عامل كيف يا "+nm()+"؟");
+            if(/^(مع السلام[ةه]|باي|تصبح على خير|يلا سلام)/.test(l))return R("مع السلامة يا "+nm()+" 👋 أنا هنا متين ما رجعت.");
+            if(/نكته|نكتة|اضحكني|ضحكني/.test(l))return R(JOKES[Math.floor(Math.random()*JOKES.length)]);
+            if(/بتقدري|بتعملي شنو|تقدري تعملي|مساعده|مساعدة/.test(l))return R("أقدر: أتكلم معاك 💬، أحسب لك (مثلا: 25 × 4)، أقول ليك الوقت والتاريخ، أحفظ اسمك وبعض معلوماتك، وأتعلم منك: اكتب «علمني ...» أو قول «السودان هو بلد...». ولو في نت بسأل النت لو ما عرفت.");
+            if(/اسمي شنو|انا منو/.test(l))return T(myName?"انت اسمك "+myName+"، وحفظتو في متصفحك.":"لسه ما عرفت اسمك 😅 قول لي: اسمي ...");
+            const nmM=q.trim().match(/^(?:[أا]نا\s+)?اسمي\s+(.{2,30})$/);
+            if(nmM&&!/شنو|ايه|منو/.test(nmM[1])){myName=nmM[1].trim();ls.set("proAI_userName",myName);updateStats();return T("تشرفنا يا "+myName+" 😄 حفظت اسمك.")}
+            /* things the user tells about himself, and recalling them */
+            const fr=q.trim().match(/^[أا]نا\s+من\s+(.{2,30})$/);
+            if(fr&&!/وين/.test(fr[1])){facts.from=fr[1].trim();saveFacts();return T("حلو، "+facts.from+" 💙 حفظتها!")}
+            if(/(انا من وين|من وين انا)/.test(l))return T(facts.from?"انت من "+facts.from+" 😄":"ما قلت لي لسه، انت من وين؟ قول: أنا من ...");
+            const ag=dg(q).match(/^عمري\s+(\d{1,3})/);
+            if(ag){facts.age=ag[1];saveFacts();return T("تمام، عمرك "+ag[1]+" سنة، حفظتها 👍")}
+            if(/(عمري كم|كم عمري)/.test(l))return T(facts.age?"عمرك "+facts.age+" سنة":"ما قلت لي عمرك لسه، قول: عمري ...");
+            const lk=q.trim().match(/^(?:[أا]نا\s+)?(?:بحب|احب)\s+(.{2,40})$/);
+            if(lk&&!/شنو|ايه/.test(lk[1])){facts.likes=[...new Set([...(facts.likes||[]),lk[1].trim()])].slice(-12);saveFacts();return T("حلو! "+lk[1].trim()+" 💙 حفظت إنك بتحبو.")}
+            if(/(بحب شنو|شنو بحب|اشياء بحبها)/.test(l))return T(facts.likes&&facts.likes.length?"بتحب: "+facts.likes.join("، ")+" 💙":"لسه ما قلت لي بتحب شنو. قول: بحب ...");
+            if(l.startsWith("علمني")||l.startsWith("احفظ")){
+              const c=q.replace(/^(علمني|احفظ)\s*(انو|أن|ان)?/i,"").trim();
+              if(c.length>2){waitingTeach=norm(c);return R("تمام، وجواب '"+c+"' شنو؟ (أو اكتب: الغاء)","teach")}
+              return R("قول لي شنو أتعلم، مثلا: علمني انو الخرطوم حارة");
+            }
+            /* learn from a plain statement like "X هو Y" */
+            const st=q.trim().match(/^(.{2,40}?)\s+(هو|هي|يعني|عبارة عن|عباره عن)\s+(.{3,200})$/);
+            if(st&&!/[؟?]\s*$/.test(q)&&!/^(ما|منو|شنو|ايه|ايش|هل|كيف|وين|ليه|انا|انت)(\s|$)/.test(norm(st[1]))&&toks(st[1]).length){
+              const k=norm(st[1]);memory[k]=brain[k]=q.trim();saveAll();updateStats();ctx.topic=k;
+              return T("فهمت ✅ حفظت إنو «"+st[1]+"» "+st[2]+" "+st[3].slice(0,60)+(st[3].length>60?"...":"")+"\nلو سألتني عنو حأجاوبك.");
+            }
+            if(/^(هلا+|اهلا|مرحبا|سلام|السلام)(?![\u0621-\u064A])/.test(l)){changeMood("happy",2);return R("هلااااا~ يا "+nm()+" 😄 عامل كيف؟ اشتقت ليك!")}
+            if(l.includes("غني")){changeMood("excited",4);return R("لا لا لا لاااا~ أنا ميكو بغني ليك 💙🎤\nقلبي بيدق لما أشوفك يا "+nm()+"~")}
+            if(l.includes("منو انت")||l.includes("من انت"))return R("أنا ميكو 🤖💙 ذكاء اصطناعي مستقل شغال في جهازك بلا نت. برد ليك من ذاكرتي، وبتعلم منك ومن النت لما يكون موجود.");
+            if(/اليوم شنو|اي يوم|ايش اليوم/.test(l))return T("اليوم "+new Date().toLocaleDateString("ar",{weekday:"long"}));
+            if(l.includes("الساعة"))return T("هسي الساعة "+new Date().toLocaleTimeString("ar"));
+            if(l.includes("التاريخ"))return T("اليوم "+new Date().toLocaleDateString("ar"));
+            if(mode!=="online"){const b=searchBrain(l);if(b)return R("🧠 "+b,"brain")}
+            return null;
+          }
+
+          /* ---------- web search (runs in parallel with the reply) ---------- */
+          function xhrJson(u,ms){
+            return new Promise((res,rej)=>{
+              const x=new XMLHttpRequest();x.open("GET",u);x.timeout=ms;
+              x.onload=()=>{if(x.status>=200&&x.status<300){try{res(JSON.parse(x.responseText))}catch(e){rej(e)}}else rej(new Error("http "+x.status))};
+              x.onerror=()=>rej(new TypeError("xhr"));
+              x.ontimeout=()=>{const e=new Error("timeout");e.name="TimeoutError";rej(e)};
+              x.send();
+            });
+          }
+          /* no AbortController/signal: some hosts (webviews, preview frames) proxy fetch and can't pass an AbortSignal */
+          async function jget(u,ms=12000,tries=2){
+            for(let i=0;i<tries;i++){
+              let timer;
+              try{
+                const r=await Promise.race([fetch(u),new Promise((_,rej)=>{timer=setTimeout(()=>{const e=new Error("timeout");e.name="TimeoutError";rej(e)},ms)})]);
+                if(!r.ok)throw new Error("http "+r.status);
+                return await r.json();
+              }catch(e){
+                if(e.name!=="TimeoutError"&&!/^http /.test(e.message||"")){
+                  try{return await xhrJson(u,ms)}catch(e2){e=e2}
+                }
+                if(i===tries-1)throw e;
+              }finally{clearTimeout(timer)}
+            }
+          }
+          const why=e=>e&&(e.name==="AbortError"||e.name==="TimeoutError")?"انتهى الوقت (النت بطيء)":e&&e.name==="TypeError"?"تعذر الاتصال (النت أو حظر)":(e&&e.message)||"خطأ";
+          async function wiki(lang,q){
+            const d=await jget(`https://${lang}.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(q)}&gsrlimit=1&prop=extracts|pageimages|info&exintro=1&explaintext=1&exchars=700&piprop=thumbnail&pithumbsize=400&inprop=url&format=json&origin=*`);
+            const p=d.query&&Object.values(d.query.pages||{})[0];
+            if(!p||!p.extract)return null;
+            return{title:p.title,extract:p.extract.trim(),url:p.fullurl||"",thumb:(p.thumbnail&&p.thumbnail.source)||"",source:lang==="ar"?"ويكيبيديا العربية":"Wikipedia (English)"};
+          }
+          async function ddg(q){
+            const d=await jget("https://api.duckduckgo.com/?q="+encodeURIComponent(q)+"&format=json&no_html=1&skip_disambig=1");
+            const im=d.Image?(d.Image.startsWith("http")?d.Image:"https://duckduckgo.com"+d.Image):"";
+            if(d.AbstractText)return{title:d.Heading||q,extract:d.AbstractText,url:d.AbstractURL||"",thumb:im,source:"DuckDuckGo"};
+            const f=(d.RelatedTopics||[]).find(x=>x&&x.Text);
+            if(f)return{title:q,extract:f.Text,url:f.FirstURL||"",thumb:"",source:"DuckDuckGo"};
+            return null;
+          }
+          /* weather (Open-Meteo, no key needed) */
+          const WMO={0:"صافي ☀️",1:"غالبا صافي 🌤️",2:"غائم جزئيا ⛅",3:"غائم ☁️",45:"ضباب 🌫️",48:"ضباب 🌫️",51:"رذاذ خفيف 🌦️",53:"رذاذ 🌦️",55:"رذاذ كثيف 🌦️",61:"مطر خفيف 🌧️",63:"مطر 🌧️",65:"مطر غزير 🌧️",71:"ثلج خفيف 🌨️",73:"ثلج 🌨️",75:"ثلج كثيف 🌨️",80:"زخات مطر 🌦️",81:"زخات مطر 🌧️",82:"زخات عنيفة ⛈️",95:"عاصفة رعدية ⛈️",96:"عاصفة رعدية وبرد ⛈️",99:"عاصفة رعدية وبرد ⛈️"};
+          const WORDS_WEATHER=/^(طقس|الطقس|حراره|حرارة|الحراره|الحرارة|جو|الجو)$/,WORDS_NEWS=/^(اخبار|الاخبار|خبر|الخبر)$/;
+          const wordsOf=t=>norm(t).split(/[\s؟?!.,،]+/).filter(Boolean);
+          function webKind(t){const w=wordsOf(t);return w.some(x=>WORDS_WEATHER.test(x))?"weather":w.some(x=>WORDS_NEWS.test(x))?"news":"search"}
+          function cityOf(t){const c=wordsOf(t).filter(x=>!WORDS_WEATHER.test(x)&&!/^(في|ب|هسي|الان|اليوم|شنو|كيف|ايه|كم|درجه|درجة|ابحث|بحث|عن|مدينه|مدينة)$/.test(x)).join(" ");return c||"الخرطوم"}
+          async function weather(city){
+            let g=await jget(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=ar&format=json`);
+            if(!(g.results&&g.results[0])&&city.startsWith("ال"))g=await jget(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city.slice(2))}&count=1&language=ar&format=json`);
+            const r=g.results&&g.results[0];
+            if(!r)return{title:"الطقس",icon:"🌤️",extract:"ما لقيت مدينة اسمها «"+city+"». جرب تكتب اسمها بطريقة تانية.",url:"",thumb:"",source:"Open-Meteo",nolearn:true};
+            const w=await jget(`https://api.open-meteo.com/v1/forecast?latitude=${r.latitude}&longitude=${r.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&timezone=auto`);
+            const c=w.current;if(!c)return null;
+            return{title:"الطقس في "+r.name,icon:"🌤️",extract:"🌡️ الحرارة: "+c.temperature_2m+"°\n💧 الرطوبة: "+c.relative_humidity_2m+"%\n💨 الرياح: "+c.wind_speed_10m+" كم/س"+(WMO[c.weather_code]?"\nالسماء: "+WMO[c.weather_code]:""),url:"",thumb:"",source:"Open-Meteo",nolearn:true};
+          }
+          async function wikiLite(lang,q){
+            const d=await jget(`https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&srlimit=1&format=json&origin=*`);
+            const h=d.query&&d.query.search&&d.query.search[0];if(!h)return null;
+            const t=h.snippet.replace(/<[^>]*>/g,"").replace(/&quot;/g,'"').replace(/&amp;/g,"&").trim();
+            return{title:h.title,extract:t+"...",url:`https://${lang}.wikipedia.org/wiki/${encodeURIComponent(h.title.replace(/ /g,"_"))}`,thumb:"",source:"ويكيبيديا (ملخص قصير)"};
+          }
+          async function webSearch(q,kind="search",raw=""){
+            const errs=[];
+            if(kind==="weather"){try{const r=await weather(cityOf(raw||q));if(r)return r}catch(e){errs.push("الطقس: "+why(e))}}
+            if(kind==="news"){try{const r=await ddg(q+" اخبار news");if(r){r.icon="📰";r.source="أخبار (DuckDuckGo)";r.nolearn=true;return r}}catch(e){errs.push("الأخبار: "+why(e))}}
+            const g=(n,p)=>{p.catch(e=>errs.push(n+": "+why(e)));return p};
+            const a=g("ويكيبيديا العربية",wiki("ar",q)),l=g("ويكيبيديا (خفيف)",wikiLite("ar",q)),d=g("DuckDuckGo",ddg(q)),e=g("Wikipedia EN",wiki("en",q));
+            [l,d,e].forEach(x=>x.catch(()=>{}));
+            const ra=await Promise.allSettled([a]);
+            if(ra[0].status==="fulfilled"&&ra[0].value)return ra[0].value;
+            const rest=await Promise.allSettled([d,e,l]);
+            if(![...ra,...rest].some(x=>x.status==="fulfilled")){const er=new Error("net");er.details=errs;throw er}
+            for(const x of rest)if(x.status==="fulfilled"&&x.value)return x.value;
+            return null;
+          }
+          let activeSearches=0;
+          function searching(n){activeSearches+=n;$("hAv").classList.toggle("searching",activeSearches>0)}
+
+          async function send(){
+            const inp=$("input"),txt=inp.value.trim();
+            if(!txt)return;
+            inp.value="";closeMenu();
+            const u=addMsg(txt,"user");
+            u.meta.textContent=time()+" • Read";
+            /* answer to a pending "teach me" question */
+            if(waitingTeach&&looksLikeQuestion(txt))waitingTeach=null;
+            if(waitingTeach){
+              const k=waitingTeach;waitingTeach=null;
+              if(/^(الغاء|إلغاء|لا)$/.test(txt)){botSay("تمام، لغيت التعليم 👍");return}
+              memory[k]=txt;brain[k]=txt;saveAll();updateStats();
+              botSay("حفظتها ✅ لو سألتني عن '"+k+"' حأجاوبك طوالي.");return;
+            }
+            let explicit=/^(ابحث|بحث)/.test(txt);
+            let tq=topic(txt);
+            if(/^(كمان|اكتر|زيدني|وبعدين)/.test(norm(txt))&&ctx.topic){explicit=true;tq=ctx.topic}
+            const wk=webKind(txt),live=wk==="weather"||wk==="news";
+            const local=(explicit||live)?null:localReply(txt);
+            if(local&&local.kind==="teach"){botSay(local.text);return}
+            if(llm.engine&&!explicit&&!live&&!(local&&local.kind==="tool")){llm.q=llm.q.then(()=>llmAnswer(txt)).catch(()=>{});return}
+            const canNet=mode!=="offline"&&navigator.onLine;
+            if(live&&!canNet){botSay("الطقس والأخبار محتاجين نت 📴 وما في نت هسي.");return}
+            const doSearch=canNet&&!local&&tq.length>=2; /* memory first; the web is only a helper */
+
+            /* 1) start searching right now, in the background */
+            let sp=null;
+            if(doSearch){searching(1);sp=webSearch(tq,wk,txt)}
+
+            /* 2) reply immediately while the search runs */
+            if(local)botSay(local.text);
+            else if(doSearch)botSay("ثواني يا "+nm()+"، بسأل النت عن «"+tq+"» وأرجع ليك 🔎");
+            else{
+              const b=searchBrain(tq);
+              if(b){botSay("🧠 من راسي بلا نت: "+b);return}
+              waitingTeach=norm(tq);
+              botSay("والله دي لسه ما اتعلمتها 🤔 وما عندي نت أسأل منو.\nعلمني، جواب '"+tq+"' شنو؟ (أو اكتب: الغاء)");
+              return;
+            }
+
+            /* 3) when the web answer arrives, add it as a follow-up message */
+            const h=addMsg("🔎 ببحث في النت...","ai");h.bub.classList.add("typing");
+            let r=null,err=false;
+            let details=[];
+            try{r=await sp}catch(e){err=true;details=e.details||[why(e)]}
+            searching(-1);h.bub.classList.remove("typing");
+            if(r){
+              ctx.topic=tq;fillRich(h.bub,r);
+              const src=document.createElement("div");src.className="meta";src.textContent="المصدر: "+r.source;h.bub.append(src);
+              if(learnOn&&!r.nolearn&&tq.length>=3){brain[norm(tq)]=r.extract.slice(0,500);saveAll();updateStats()}
+              speak("لقيت ليك: "+r.extract.slice(0,250),true);
+            }else if(local){
+              h.row.remove(); /* already answered from memory, nothing new online */
+            }else{
+              const b=searchBrain(tq);
+              h.bub.textContent=b?"🧠 من راسي: "+b:err?"ما عندي معلومة عن «"+tq+"» ولا قدرت أسأل النت هسي 📴\nعلمني انت: اكتب «علمني ...» أو قول «"+tq+" هو ...»":"ما لقيت معلومة عن «"+tq+"» في النت. جرب كلمات تانية أو علمني انت 🙂";
+              if(!b){[["🔍 قوقل","https://www.google.com/search?q="],["▶️ يوتيوب","https://www.youtube.com/results?search_query="],["📚 ويكيبيديا","https://ar.wikipedia.org/wiki/Special:Search?search="]].forEach(([n,u])=>{const a=document.createElement("a");a.href=u+encodeURIComponent(tq);a.target="_blank";a.rel="noopener";a.textContent=n+" ←";a.style.cssText="display:block;margin-top:8px";h.bub.append(a)})}
+            }
+            chat.scrollTop=chat.scrollHeight;
+          }
+
+          async function diagnose(){
+            closeMenu();
+            const m=addMsg("🔧 بفحص الاتصال... (ممكن ياخد لحدي نص دقيقة)","ai");m.bub.classList.add("typing");
+            const out=["الجهاز يقول: "+(navigator.onLine?"متصل ✅":"بلا نت ❌"),"الصفحة مفتوحة من: "+(location.protocol==="file:"?"ملف محلي (ممكن يمنع الاتصال، ارفعه على رابط https)":location.origin)];
+            const tests=[["ويكيبيديا العربية","https://ar.wikipedia.org/w/api.php?action=query&meta=siteinfo&format=json&origin=*"],["Wikipedia English","https://en.wikipedia.org/w/api.php?action=query&meta=siteinfo&format=json&origin=*"],["DuckDuckGo","https://api.duckduckgo.com/?q=test&format=json"]];
+            await Promise.all(tests.map(async([n,u],i)=>{
+              const t0=performance.now();
+              try{await jget(u,15000,1);out[i+2]=n+": ✅ "+((performance.now()-t0)/1000).toFixed(1)+" ث"}
+              catch(e){out[i+2]=n+": ❌ "+why(e)}
+            }));
+            m.bub.classList.remove("typing");m.bub.textContent=out.join("\n");
+          }
+          $("diagBtn").onclick=diagnose;
+          $("expBtn").onclick=()=>{const b=new Blob([JSON.stringify({v:1,name:myName,memory,brain,facts})],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="miku-brain.json";document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000);closeMenu();toast("💾 حفظت نسخة من عقل ميكو")};
+          $("impBtn").onclick=()=>$("impFile").click();
+          $("impFile").onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());let n=0;for(const k in(d.brain||{})){brain[k]=String(d.brain[k]);n++}for(const k in(d.memory||{}))memory[k]=String(d.memory[k]);if(d.facts)Object.assign(facts,d.facts);saveAll();saveFacts();updateStats();closeMenu();toast("📂 استرجعت "+n+" معلومة")}catch(x){toast("الملف ما صحيح")}e.target.value=""};
+
+          /* ---------- smart brain: a real language model that runs on the device (WebLLM + WebGPU) ---------- */
+          const LLM_URL="https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.84/+esm";
+          const LLM_PICK={small:/^Qwen2\.5-0\.5B-Instruct-q4f16_1/,mid:/^Qwen2\.5-1\.5B-Instruct-q4f16_1/};
+          const hist=[];
+          async function loadLLM(which,silent){
+            if(llm.loading)return;
+            if(!navigator.gpu){botSay("العقل الذكي محتاج WebGPU، وجهازك أو متصفحك ما بيدعمو (جرب كروم حديث على جوال قوي). ميكو حتكمل بالوضع العادي 💙",false);return}
+            llm.loading=true;updateStats();
+            const m=silent?null:addMsg("⏳ بجهز العقل الذكي... أول مرة بينزل ملف كبير، خليك على واي فاي ولا تقفل الصفحة","ai");
+            const show=t=>{if(m)m.bub.textContent=t};
+            try{
+              if(!llm.mod)llm.mod=await import(LLM_URL);
+              const id=llm.mod.prebuiltAppConfig.model_list.map(x=>x.model_id).find(x=>LLM_PICK[which].test(x));
+              if(!id)throw new Error("النموذج غير موجود في هذه النسخة من المكتبة");
+              if(llm.engine&&llm.engine.unload)await llm.engine.unload();
+              llm.engine=await llm.mod.CreateMLCEngine(id,{initProgressCallback:p=>show("⏳ تجهيز العقل الذكي: "+Math.round((p.progress||0)*100)+"%")});
+              llm.which=which;ls.set("proAI_llm",which);
+              show("✅ العقل الذكي شغال! هسي بقدر أتكلم معاك في أي موضوع، وبرد من جهازك نفسو.");
+            }catch(e){llm.engine=null;show("ما قدرت أشغل العقل الذكي: "+why(e)+"\nميكو حتكمل بالوضع العادي.")}
+            llm.loading=false;updateStats();
+          }
+          async function stopLLM(){try{if(llm.engine&&llm.engine.unload)await llm.engine.unload()}catch(e){}llm.engine=null;llm.which="";ls.del("proAI_llm");hist.length=0;updateStats();toast("العقل الذكي اتقفل، رجعنا للوضع العادي")}
+          const needsFacts=t=>!/^(كيفك|كيف حالك|كيف الحال)/.test(norm(t))&&(/[؟?]\s*$/.test(t)||/^(ما|ماذا|منو|من هو|شنو|ايه|ايش|متين|وين|كم|ليه|لماذا|هل|كيف|اشرح|عرف|حدثني)(\s|$)/.test(norm(t)));
+          function systemPrompt(){
+            const f=[];if(myName)f.push("اسم المستخدم: "+myName);if(facts.from)f.push("من: "+facts.from);if(facts.age)f.push("عمره: "+facts.age);if(facts.likes&&facts.likes.length)f.push("بيحب: "+facts.likes.join("، "));
+            return "أنتِ ميكو، مساعدة ذكاء اصطناعي ودودة ومرحة، شخصيتك مستوحاة من هاتسوني ميكو. تتكلمين بالعربية بلهجة سودانية مبسّطة وواضحة. ردودك قصيرة ومفيدة (من جملتين إلى خمس) إلا لو طُلب منك تفصيل. إذا أُرفقت معلومات مساعدة فاعتمدي عليها. إذا لم تعرفي الجواب فقولي «ما أعرف» ولا تخترعي معلومات. لا تتظاهري أنك بشر."+(f.length?"\nمعلومات عن المستخدم: "+f.join("، ")+".":"");
+          }
+          async function llmAnswer(txt){
+            const row=addMsg("…","ai");row.bub.classList.add("typing");
+            const extra=[];
+            const mem=searchBrain(txt);if(mem)extra.push("معلومة محفوظة في ذاكرة ميكو: "+mem);
+            if(mode!=="offline"&&navigator.onLine&&needsFacts(txt)){ /* retrieval: look the topic up while thinking */
+              searching(1);
+              const r=await Promise.race([webSearch(topic(txt),"search",txt).catch(()=>null),new Promise(res=>setTimeout(()=>res(null),5000))]);
+              searching(-1);
+              if(r)extra.push("من النت ("+r.source+"): "+r.extract.slice(0,700));
+            }
+            const user=extra.length?txt+"\n\n[معلومات مساعدة، استخدمها لو فيها فايدة:\n"+extra.join("\n")+"]":txt;
+            const messages=[{role:"system",content:systemPrompt()},...hist.slice(-8),{role:"user",content:user}];
+            let out="";
+            try{
+              const stream=await llm.engine.chat.completions.create({messages,stream:true,temperature:0.7,max_tokens:400});
+              row.bub.classList.remove("typing");row.bub.textContent="";
+              for await(const ch of stream){const d=(ch.choices[0]&&ch.choices[0].delta&&ch.choices[0].delta.content)||"";if(d){out+=d;row.bub.textContent=out;chat.scrollTop=chat.scrollHeight}}
+            }catch(e){row.bub.classList.remove("typing");if(!out){row.bub.textContent="العقل الذكي وقف: "+why(e)+"\nجرب ترسل تاني، أو أقفلو من القائمة.";return}}
+            if(!out.trim()){row.bub.textContent="ما قدرت أرد 🤔 جرب تسألني بطريقة تانية.";return}
+            hist.push({role:"user",content:txt},{role:"assistant",content:out});if(hist.length>12)hist.splice(0,hist.length-12);
+            speak(out.slice(0,300));
+          }
+          $("llmSmall").onclick=()=>{closeMenu();loadLLM("small")};
+          $("llmMid").onclick=()=>{closeMenu();loadLLM("mid")};
+          $("llmOff").onclick=()=>{closeMenu();stopLLM()};
+
+          /* ---------- name / login ---------- */
+          function showLogin(cancelable){$("nameInput").value=myName;$("nameCancel").style.display=cancelable?"block":"none";$("login").classList.remove("hide");setTimeout(()=>$("nameInput").focus(),50)}
+          function saveName(){
+            const n=$("nameInput").value.trim();
+            if(n.length<2){toast("اكتب اسمك أولا (حرفين على الأقل)");return}
+            const first=!myName;myName=n;
+            ls.set("proAI_userName",n);ls.set("proAI_userProfile",JSON.stringify({name:n}));
+            $("login").classList.add("hide");updateStats();
+            botSay(first?"هلااااا~ يا "+n+" 😄\nحفظت اسمك في متصفحك.\n\nداير نتكلم في شنو؟":"تمام يا "+n+"، غيرت اسمك ❤️");
+          }
+          $("nameOk").onclick=saveName;
+          $("nameCancel").onclick=()=>$("login").classList.add("hide");
+          $("nameInput").addEventListener("keydown",e=>{if(e.key==="Enter")saveName()});
+
+          /* ---------- menu & controls ---------- */
+          function closeMenu(){$("menu").classList.remove("open")}
+          $("menuBtn").onclick=e=>{e.stopPropagation();updateStats();$("menu").classList.toggle("open")};
+          document.addEventListener("click",e=>{if(!$("menu").contains(e.target))closeMenu()});
+          $("backBtn").onclick=()=>{closeMenu();$("quick").classList.remove("open");$("plusBtn").classList.remove("open");if(history.length>1)history.back()};
+          $("callBtn").onclick=()=>{voiceOn=!voiceOn;ls.set("proAI_voice",voiceOn?"on":"off");if(!voiceOn&&"speechSynthesis" in window)speechSynthesis.cancel();updateStats();toast(voiceOn?"الصوت شغال 🔊":"الصوت مقفول 🔇")};
+          $("plusBtn").onclick=()=>{$("quick").classList.toggle("open");$("plusBtn").classList.toggle("open")};
+          $("quick").addEventListener("click",e=>{const q=e.target.dataset&&e.target.dataset.q;if(q){$("input").value=q;send()}});
+          function setMode(m){mode=m;ls.set("proAI_mode",m);updateStats();toast(m==="offline"?"📴 بلا نت فقط":m==="online"?"🌐 بي نت فقط":"⚡ تلقائي")}
+          $("mOff").onclick=()=>setMode("offline");$("mOn").onclick=()=>setMode("online");$("mAuto").onclick=()=>setMode("auto");
+          $("learnBtn").onclick=()=>{learnOn=!learnOn;ls.set("proAI_learn",learnOn?"on":"off");updateStats();toast(learnOn?"🧠 ميكو حتتعلم من البحث":"التعلم الأوتوماتيكي مقفول")};
+          $("mikuBtn").onclick=()=>{mikuMode=!mikuMode;ls.set("proAI_miku",mikuMode?"on":"off");updateStats();if(mikuMode)speak("هلااااا~ أنا ميكو")};
+          $("nameBtn").onclick=()=>{closeMenu();showLogin(true)};
+          $("mClear").onclick=()=>{chat.textContent="";waitingTeach=null;closeMenu();botSay("مسحت المحادثة بس 🗑️\nاسمك وذاكرتي لسه محفوظين يا "+nm()+".")};
+          $("mReset").onclick=()=>{
+            if(!confirm("تمسح كل ما اتعلمتو ميكو؟ (اسمك ما بيتمسح)"))return;
+            ls.del("proAI_memory");ls.del("proAI_brain");ls.del("proAI_facts");facts={};memory=Object.create(null);brain=Object.create(null);seedBrain();
+            waitingTeach=null;changeMood("sad",-5);closeMenu();botSay("مسحت ذاكرتي 🧹 ورجعت للمعلومات الأساسية بس.");
+          };
+          $("sendBtn").onclick=send;
+          $("input").addEventListener("keydown",e=>{if(e.key==="Enter")send()});
+          window.addEventListener("online",()=>{updateStats();toast("🌐 رجع النت")});
+          window.addEventListener("offline",()=>{updateStats();toast("📴 النت قطع، ميكو شغالة من ذاكرتها")});
+
+          /* ---------- app (PWA): works offline + installable ---------- */
+          if("serviceWorker" in navigator&&location.protocol!=="file:"){
+            window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
+          }
+          let installEvt=null;
+          const standalone=matchMedia("(display-mode: standalone)").matches||navigator.standalone;
+          window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();installEvt=e;$("installBtn").style.display="block"});
+          window.addEventListener("appinstalled",()=>{installEvt=null;$("installBtn").style.display="none";toast("تم تثبيت التطبيق ✅")});
+          if(!standalone&&/iphone|ipad|ipod/i.test(navigator.userAgent))$("installBtn").style.display="block";
+          $("installBtn").onclick=async()=>{
+            if(installEvt){installEvt.prompt();await installEvt.userChoice;installEvt=null;$("installBtn").style.display="none"}
+            else toast("في آيفون: زر المشاركة ثم «إضافة إلى الشاشة الرئيسية»");
+            closeMenu();
+          };
+
+          /* ---------- start ---------- */
+          updateStats();
+          {const sv=ls.get("proAI_llm","");if(sv&&LLM_PICK[sv]&&navigator.gpu)setTimeout(()=>loadLLM(sv,true).then(()=>{if(!llm.engine)toast("العقل الذكي ما اشتغل، ميكو بالوضع العادي")}),1200)}
+          if(myName){$("login").classList.add("hide");botSay("هلااااا~ يا "+myName+" 😄\nداير نتكلم في شنو؟",false)}
+          else showLogin(false);
+          </script>
+          </body>
+          </html>
+          MIKU_EOF_X9
+          mkdir -p MikuAndroid/app/src/main/assets
+          unzip -j -o MikuAndroid-humanlike-thinking.zip 'MikuAndroid/app/src/main/assets/miku.png' -d MikuAndroid/app/src/main/assets
+
+      - name: Build debug APK
+        working-directory: MikuAndroid
+        run: gradle --no-daemon assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: M-AI-Miku-debug-apk
+          path: MikuAndroid/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
